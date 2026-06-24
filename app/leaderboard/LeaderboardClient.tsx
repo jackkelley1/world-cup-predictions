@@ -16,7 +16,7 @@ interface Board {
   finishedCount: number;
 }
 
-type Scope = "today" | "week" | "alltime";
+type Scope = "today" | "alltime";
 
 interface BoardResponse {
   scopes: Record<Scope, Board>;
@@ -25,7 +25,6 @@ interface BoardResponse {
 
 const SCOPES: { id: Scope; label: string }[] = [
   { id: "today", label: "Today" },
-  { id: "week", label: "This week" },
   { id: "alltime", label: "All-time" },
 ];
 
@@ -101,9 +100,7 @@ export default function LeaderboardClient() {
         <p className="rounded-2xl border border-border bg-surface p-6 text-center text-sm text-muted">
           {scope === "today"
             ? "No scores yet today. Once today's matches finish, the board lights up."
-            : scope === "week"
-              ? "No scores yet this week."
-              : "No scores yet. Once matches finish, the board lights up."}
+            : "No scores yet. Once matches finish, the board lights up."}
         </p>
       ) : (
         <ul className="flex flex-col gap-2">

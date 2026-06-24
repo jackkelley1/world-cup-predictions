@@ -79,13 +79,18 @@ function ScoreInput({
 }) {
   return (
     <input
-      type="number"
+      type="text"
       inputMode="numeric"
-      min={0}
-      max={99}
+      pattern="[0-9]*"
+      maxLength={2}
       aria-label={ariaLabel}
       value={value}
       disabled={disabled}
+      onKeyDown={(e) => {
+        if (e.key.length === 1 && !/[0-9]/.test(e.key) && !e.metaKey && !e.ctrlKey) {
+          e.preventDefault();
+        }
+      }}
       onChange={(e) => {
         const v = e.target.value.replace(/[^0-9]/g, "").slice(0, 2);
         onChange(v);
@@ -111,6 +116,7 @@ export default function PredictClient({
   const [nameInput, setNameInput] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [picks, setPicks] = useState<Picks>({});
+  const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -129,6 +135,7 @@ export default function PredictClient({
       next[p.matchId] = { home: String(p.home), away: String(p.away) };
     }
     setPicks(next);
+    setDirty(false);
   }, []);
 
   useEffect(() => {
@@ -158,6 +165,7 @@ export default function PredictClient({
   }
 
   function setPick(id: string, side: "home" | "away", v: string) {
+    setDirty(true);
     setPicks((prev) => ({
       ...prev,
       [id]: { home: prev[id]?.home ?? "", away: prev[id]?.away ?? "", [side]: v },
@@ -195,6 +203,7 @@ export default function PredictClient({
       else failed++;
     }
     setSaving(false);
+    if (failed === 0) setDirty(false);
     setSaveMsg(
       failed > 0
         ? `Saved ${count}, ${failed} failed (locked?)`
@@ -366,7 +375,12 @@ export default function PredictClient({
         </div>
       )}
 
-      <SharePicks matches={matches} picks={picks} dayLabel={dayLabel} />
+      <SharePicks
+        matches={matches}
+        picks={picks}
+        dayLabel={dayLabel}
+        canCopy={!dirty}
+      />
 
       {matches.some((m) => m.status === "finished" && m.score) && (
         <ShareResults matches={matches} picks={picks} dayLabel={dayLabel} />

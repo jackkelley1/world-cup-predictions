@@ -22,7 +22,14 @@ interface Card {
   picks: Record<string, [number, number]>;
 }
 
+interface DayOption {
+  key: string;
+  label: string;
+}
+
 interface Data {
+  days: DayOption[];
+  dayKey: string;
   dayLabel: string | null;
   meId: string | null;
   matches: SCMatch[];
@@ -44,15 +51,23 @@ function tierClass(tier: 0 | 1 | 2 | 3): string {
 
 export default function Scorecards() {
   const [data, setData] = useState<Data | null>(null);
+  // Selected day key; null means "let the server pick the latest day".
+  const [day, setDay] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     async function load() {
       try {
-        const res = await fetch("/wc/api/scorecards", { cache: "no-store" });
+        const qs = day ? `?day=${encodeURIComponent(day)}` : "";
+        const res = await fetch(`/wc/api/scorecards${qs}`, {
+          cache: "no-store",
+        });
         if (!res.ok) return;
         const d = (await res.json()) as Data;
-        if (active) setData(d);
+        if (active) {
+          setData(d);
+          if (day === null) setDay(d.dayKey);
+        }
       } catch {
         // ignore
       }
@@ -63,17 +78,76 @@ export default function Scorecards() {
       active = false;
       clearInterval(id);
     };
-  }, []);
+  }, [day]);
 
   if (!data || data.matches.length === 0) return null;
 
+  const idx = data.days.findIndex((d) => d.key === data.dayKey);
+  const prevDay = idx > 0 ? data.days[idx - 1] : null;
+  const nextDay =
+    idx >= 0 && idx < data.days.length - 1 ? data.days[idx + 1] : null;
+  const dayHasScores = data.matches.some((m) => m.score != null);
+
+  // Daily total per card, then rank by total (ties share a rank).
+  const scored = data.cards.map((c) => {
+    const total = data.matches.reduce((sum, m) => {
+      const pick = c.picks[m.id];
+      if (!pick || m.score == null) return sum;
+      return sum + scoreMatch(pick, m.score as [number, number]);
+    }, 0);
+    return { card: c, total };
+  });
+  if (dayHasScores) {
+    scored.sort(
+      (a, b) => b.total - a.total || a.card.name.localeCompare(b.card.name),
+    );
+  }
+  let prevTotal: number | null = null;
+  let prevRank = 0;
+  const rows = scored.map((s, i) => {
+    let rank: number | null = null;
+    if (dayHasScores) {
+      rank = s.total === prevTotal ? prevRank : i + 1;
+      prevTotal = s.total;
+      prevRank = rank;
+    }
+    return { ...s, rank };
+  });
+
+  const rankBadge = (rank: number) => {
+    if (rank === 1) return "🥇";
+    if (rank === 2) return "🥈";
+    if (rank === 3) return "🥉";
+    return `${rank}`;
+  };
+
   return (
     <section className="mt-6">
-      <div className="mb-3 flex items-baseline justify-between">
+      <div className="mb-3 flex items-center justify-between gap-2">
         <h2 className="text-lg font-bold">Scorecards</h2>
-        {data.dayLabel && (
-          <span className="text-xs text-muted">{data.dayLabel}</span>
-        )}
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => prevDay && setDay(prevDay.key)}
+            disabled={!prevDay}
+            aria-label="Previous day"
+            className="rounded-md border border-border bg-surface px-2 py-1 text-sm text-foreground transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            ‹
+          </button>
+          <span className="min-w-[6.5rem] text-center text-xs font-medium text-muted">
+            {data.dayLabel}
+          </span>
+          <button
+            type="button"
+            onClick={() => nextDay && setDay(nextDay.key)}
+            disabled={!nextDay}
+            aria-label="Next day"
+            className="rounded-md border border-border bg-surface px-2 py-1 text-sm text-foreground transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            ›
+          </button>
+        </div>
       </div>
 
       {data.cards.length === 0 ? (
@@ -86,7 +160,14 @@ export default function Scorecards() {
             <thead>
               <tr className="border-b border-border">
                 <th className="sticky left-0 z-10 bg-surface px-3 py-2 text-left font-semibold">
-                  Player
+                  <div className="flex items-center gap-1.5">
+                    <span>Player</span>
+                    {dayHasScores && (
+                      <span className="ml-auto text-xs font-medium text-muted">
+                        Day pts
+                      </span>
+                    )}
+                  </div>
                 </th>
                 {data.matches.map((m) => (
                   <th
@@ -108,7 +189,7 @@ export default function Scorecards() {
               </tr>
             </thead>
             <tbody>
-              {data.cards.map((c) => {
+              {rows.map(({ card: c, total, rank }) => {
                 const mine = c.userId === data.meId;
                 return (
                   <tr
@@ -118,14 +199,26 @@ export default function Scorecards() {
                     }`}
                   >
                     <td
-                      className={`sticky left-0 z-10 max-w-[8rem] truncate px-3 py-2 font-medium ${
+                      className={`sticky left-0 z-10 px-3 py-2 font-medium ${
                         mine ? "bg-[#172338]" : "bg-surface"
                       }`}
                     >
-                      {c.name}
-                      {mine && (
-                        <span className="ml-1.5 text-xs text-accent">you</span>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        {rank != null && (
+                          <span className="w-5 shrink-0 text-center text-xs font-semibold text-muted">
+                            {rankBadge(rank)}
+                          </span>
+                        )}
+                        <span className="max-w-[8rem] truncate">{c.name}</span>
+                        {mine && (
+                          <span className="text-xs text-accent">you</span>
+                        )}
+                        {dayHasScores && (
+                          <span className="ml-auto whitespace-nowrap rounded-md bg-surface-2 px-1.5 py-0.5 text-xs font-semibold text-foreground">
+                            {total} pt{total === 1 ? "" : "s"}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     {data.matches.map((m) => {
                       const pick = c.picks[m.id];

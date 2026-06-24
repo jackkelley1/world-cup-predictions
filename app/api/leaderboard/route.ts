@@ -6,8 +6,6 @@ import { tzDateKey } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
 export async function GET() {
   const store = getStore();
   const [matches, predictions, names, overrides] = await Promise.all([
@@ -35,7 +33,6 @@ export async function GET() {
   const todayFinals = filterFinals(
     (k) => k != null && tzDateKey(k) === todayKey,
   );
-  const weekFinals = filterFinals((k) => k != null && k >= now - WEEK_MS);
 
   function board(f: Record<string, [number, number]>) {
     return {
@@ -47,7 +44,6 @@ export async function GET() {
   return NextResponse.json({
     scopes: {
       today: board(todayFinals),
-      week: board(weekFinals),
       alltime: board(finals),
     },
     playerCount: Object.keys(names).length,

@@ -29,15 +29,18 @@ export default function SharePicks({
   matches,
   picks,
   dayLabel,
+  canCopy = true,
 }: {
   matches: ClientMatch[];
   picks: Record<string, { home: string; away: string }>;
   dayLabel: string;
+  canCopy?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const text = buildShareText(matches, picks, dayLabel);
 
   async function copy() {
+    if (!canCopy) return;
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -59,9 +62,11 @@ export default function SharePicks({
         <h2 className="text-sm font-semibold text-foreground">Share your picks</h2>
         <button
           onClick={copy}
-          className="rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-[#04150d] transition-colors hover:bg-accent-strong"
+          disabled={!canCopy}
+          title={canCopy ? undefined : "Save your picks first"}
+          className="rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-[#04150d] transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-accent"
         >
-          {copied ? "Copied!" : "Copy my picks"}
+          {copied ? "Copied!" : canCopy ? "Copy my picks" : "Save to copy"}
         </button>
       </div>
       <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl bg-surface-2 p-3 text-sm leading-6 text-foreground">

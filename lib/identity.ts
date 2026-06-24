@@ -16,23 +16,24 @@ export const UID_COOKIE_OPTS = {
 };
 
 /**
- * Resolve the current user. Cookie is the primary identity (per-browser); if
- * there's no cookie we fall back to the most recent user from the same IP.
- * Returns whether the cookie should be (re)set to heal IP-only matches.
+ * Resolve the current user strictly by the per-browser cookie.
+ *
+ * We deliberately do NOT fall back to IP matching. People on the same network
+ * (home wifi, office, mobile carrier CGNAT) share one public IP, so adopting
+ * "the most recent user on this IP" merges distinct people into a single
+ * account — their predictions bleed across devices and the name form can rename
+ * the wrong account. Identity is established only when a user enters their name
+ * (see /api/name), which sets the cookie.
+ *
+ * `healCookie` is retained for the existing call sites but is always false now.
  */
 export async function resolveUser(
   req: NextRequest,
 ): Promise<{ user: User | null; healCookie: boolean }> {
-  const store = getStore();
   const uid = req.cookies.get(UID_COOKIE)?.value;
   if (uid) {
-    const user = await store.getUserById(uid);
+    const user = await getStore().getUserById(uid);
     if (user) return { user, healCookie: false };
-  }
-  const ip = ipFromRequest(req);
-  if (ip) {
-    const byIp = await store.getUserByIp(ip);
-    if (byIp) return { user: byIp, healCookie: true };
   }
   return { user: null, healCookie: false };
 }
