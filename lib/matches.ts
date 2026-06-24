@@ -1,4 +1,5 @@
 import { COUNTDOWN_OVERRIDE } from "./config";
+import { getStore } from "./db";
 import { flagUrlForTeam } from "./flags";
 import { tzDateKey } from "./time";
 
@@ -136,7 +137,36 @@ async function fetchFallback(): Promise<Match[]> {
   return normalizeOpenFootball(await res.json());
 }
 
-/** All tournament matches, cached ~30s, with last-good + openfootball fallback. */
+/** Persist the last-good primary feed so outages never change match IDs. */
+async function persistMatchCache(data: Match[]): Promise<void> {
+  try {
+    await getStore().setMatchCache(data);
+  } catch {
+    // best-effort; never let cache writes break the request
+  }
+}
+
+/** Read the DB-persisted last-good primary feed (survives redeploys). */
+async function readMatchCache(): Promise<Match[] | null> {
+  try {
+    const cached = await getStore().getMatchCache();
+    if (cached && Array.isArray(cached.json) && cached.json.length > 0) {
+      return cached.json as Match[];
+    }
+  } catch {
+    // ignore; fall through
+  }
+  return null;
+}
+
+/**
+ * All tournament matches, cached ~30s in memory.
+ *
+ * On a feed failure we serve the last-good primary data — first from memory,
+ * then from the DB (which survives redeploys). The openfootball fallback uses
+ * different match IDs, so it is only a true cold-start last resort: switching to
+ * it would orphan every saved prediction.
+ */
 export async function getMatches(): Promise<Match[]> {
   if (cache && Date.now() - cache.at < TTL_MS) return cache.data;
   try {
@@ -149,9 +179,18 @@ export async function getMatches(): Promise<Match[]> {
     if (data.length === 0) throw new Error("empty feed");
     cache = { at: Date.now(), data };
     lastGood = data;
+    void persistMatchCache(data);
     return data;
   } catch {
     if (lastGood) return lastGood;
+    // Prefer the persisted primary feed so IDs stay stable across deploys.
+    const dbCached = await readMatchCache();
+    if (dbCached) {
+      cache = { at: Date.now(), data: dbCached };
+      lastGood = dbCached;
+      return dbCached;
+    }
+    // Cold start only, with no cached primary data anywhere.
     try {
       const data = await fetchFallback();
       cache = { at: Date.now(), data };

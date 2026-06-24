@@ -31,6 +31,9 @@ export interface Store {
   getOverrides(): Promise<Record<string, [number, number]>>;
   setOverride(matchId: string, home: number, away: number): Promise<void>;
   clearOverride(matchId: string): Promise<void>;
+  /** Last-good match feed, persisted so feed outages never change match IDs. */
+  getMatchCache(): Promise<{ json: unknown; updatedAt: number } | null>;
+  setMatchCache(json: unknown): Promise<void>;
 }
 
 const DB_URL =
@@ -79,6 +82,11 @@ class PostgresStore implements Store {
         match_id TEXT PRIMARY KEY,
         home INT NOT NULL,
         away INT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS match_cache (
+        id TEXT PRIMARY KEY,
+        data JSONB NOT NULL,
+        updated_at BIGINT NOT NULL
       );
     `);
   }
@@ -184,6 +192,22 @@ class PostgresStore implements Store {
   async clearOverride(matchId: string): Promise<void> {
     await this.q("DELETE FROM score_overrides WHERE match_id = $1", [matchId]);
   }
+
+  async getMatchCache(): Promise<{ json: unknown; updatedAt: number } | null> {
+    const rows = await this.q<{ data: unknown; updated_at: string }>(
+      "SELECT data, updated_at FROM match_cache WHERE id = 'primary'",
+    );
+    if (!rows[0]) return null;
+    return { json: rows[0].data, updatedAt: Number(rows[0].updated_at) };
+  }
+
+  async setMatchCache(json: unknown): Promise<void> {
+    await this.q(
+      `INSERT INTO match_cache (id, data, updated_at) VALUES ('primary',$1,$2)
+       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(json), Date.now()],
+    );
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -194,11 +218,17 @@ interface FileData {
   users: User[];
   predictions: Prediction[];
   overrides: Record<string, [number, number]>;
+  matchCache?: { json: unknown; updatedAt: number } | null;
 }
 
 class FileStore implements Store {
   private file = path.join(process.cwd(), ".data", "store.json");
-  private data: FileData = { users: [], predictions: [], overrides: {} };
+  private data: FileData = {
+    users: [],
+    predictions: [],
+    overrides: {},
+    matchCache: null,
+  };
   private loaded = false;
   private writing: Promise<void> = Promise.resolve();
 
@@ -211,9 +241,15 @@ class FileStore implements Store {
         users: parsed.users ?? [],
         predictions: parsed.predictions ?? [],
         overrides: parsed.overrides ?? {},
+        matchCache: parsed.matchCache ?? null,
       };
     } catch {
-      this.data = { users: [], predictions: [], overrides: {} };
+      this.data = {
+        users: [],
+        predictions: [],
+        overrides: {},
+        matchCache: null,
+      };
     }
     this.loaded = true;
   }
@@ -302,6 +338,17 @@ class FileStore implements Store {
   async clearOverride(matchId: string): Promise<void> {
     await this.load();
     delete this.data.overrides[matchId];
+    await this.persist();
+  }
+
+  async getMatchCache(): Promise<{ json: unknown; updatedAt: number } | null> {
+    await this.load();
+    return this.data.matchCache ?? null;
+  }
+
+  async setMatchCache(json: unknown): Promise<void> {
+    await this.load();
+    this.data.matchCache = { json, updatedAt: Date.now() };
     await this.persist();
   }
 }
