@@ -4,6 +4,7 @@ import {
   getMatches,
   getMatchday,
   isLocked,
+  firstMatchGraceId,
   type Match,
 } from "@/lib/matches";
 import { resolveUser } from "@/lib/identity";
@@ -44,6 +45,7 @@ export async function GET(req: NextRequest) {
   const matches = (byDay.get(dayKey) ?? []).sort(
     (a, b) => a.kickoff - b.kickoff,
   );
+  const graceMatchId = firstMatchGraceId(matches, now);
   const dayIds = new Set(matches.map((m) => m.id));
   const { user } = await resolveUser(req);
 
@@ -84,7 +86,7 @@ export async function GET(req: NextRequest) {
       status: m.status,
       score: m.score,
       pkWinner: m.pkWinner,
-      locked: isLocked(m),
+      locked: isLocked(m, now, { graceMatchId }),
       kickoffLabel: formatKickoff(m.kickoff),
     })),
     cards,

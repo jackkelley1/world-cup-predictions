@@ -2,7 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getStore } from "@/lib/db";
 import { resolveUser, UID_COOKIE, UID_COOKIE_OPTS } from "@/lib/identity";
 import type { PkSide } from "@/lib/knockout";
-import { getMatchById, isLocked } from "@/lib/matches";
+import {
+  firstMatchGraceId,
+  getMatches,
+  getMatchById,
+  isLocked,
+} from "@/lib/matches";
+import { tzDateKey } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
@@ -68,7 +74,12 @@ export async function POST(req: NextRequest) {
   if (!match) {
     return NextResponse.json({ error: "Unknown match." }, { status: 404 });
   }
-  if (isLocked(match)) {
+  const all = await getMatches();
+  const dayMatches = all.filter(
+    (m) => tzDateKey(m.kickoff) === tzDateKey(match.kickoff),
+  );
+  const graceMatchId = firstMatchGraceId(dayMatches);
+  if (isLocked(match, Date.now(), { graceMatchId })) {
     return NextResponse.json(
       { error: "This match is locked." },
       { status: 409 },

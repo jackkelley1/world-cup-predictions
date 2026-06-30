@@ -14,3 +14,6 @@ export const COUNTDOWN_OVERRIDE =
   process.env.NEXT_PUBLIC_COUNTDOWN_OVERRIDE ?? "";
 
 export const UID_COOKIE = "wc_uid";
+
+/** Post-kickoff window to edit picks for the first match of the day. */
+export const FIRST_MATCH_GRACE_MS = 10 * 60 * 1000;

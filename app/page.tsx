@@ -46,6 +46,7 @@ export default async function PredictPage() {
       dayLabel={dayLabel}
       nextKickoff={md.nextKickoff}
       nextLock={nextLock}
+      graceMatchId={md.graceMatchId}
     />
   );
 }

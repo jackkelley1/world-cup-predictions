@@ -5,6 +5,7 @@ import Countdown from "./Countdown";
 import SharePicks from "./SharePicks";
 import ShareResults from "./ShareResults";
 import type { ClientMatch, NextLock, PickEntry } from "./types";
+import { FIRST_MATCH_GRACE_MS } from "@/lib/config";
 import { flagEmojiForTeam } from "@/lib/flags";
 import type { PkSide } from "@/lib/knockout";
 import { pensSuffix } from "@/lib/format-picks";
@@ -16,7 +17,14 @@ function isTiedPick(p: PickEntry | undefined): boolean {
   return Number(p.home) === Number(p.away);
 }
 
-function statusBadge(m: ClientMatch, locked: boolean) {
+function statusBadge(m: ClientMatch, locked: boolean, inGrace: boolean) {
+  if (inGrace) {
+    return (
+      <span className="rounded-full bg-accent/15 px-2 py-0.5 text-xs font-semibold text-accent">
+        Still open
+      </span>
+    );
+  }
   if (m.status === "live") {
     return (
       <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-semibold text-red-400">
@@ -160,11 +168,13 @@ export default function PredictClient({
   dayLabel,
   nextKickoff,
   nextLock,
+  graceMatchId,
 }: {
   matches: ClientMatch[];
   dayLabel: string;
   nextKickoff: number | null;
   nextLock: NextLock | null;
+  graceMatchId: string | null;
 }) {
   const [name, setName] = useState<string | null | undefined>(undefined);
   const [nameInput, setNameInput] = useState("");
@@ -245,9 +255,19 @@ export default function PredictClient({
   }
 
   const isLocked = useCallback(
-    (m: ClientMatch) => now >= m.kickoff || m.status !== "upcoming",
-    [now],
+    (m: ClientMatch) => {
+      if (m.status === "finished") return true;
+      const inGrace =
+        graceMatchId === m.id &&
+        now >= m.kickoff &&
+        now < m.kickoff + FIRST_MATCH_GRACE_MS;
+      if (inGrace) return false;
+      return now >= m.kickoff || m.status !== "upcoming";
+    },
+    [now, graceMatchId],
   );
+
+  const inGraceWindow = graceMatchId != null;
 
   function pickReady(m: ClientMatch, p: PickEntry | undefined): boolean {
     if (!p || p.home === "" || p.away === "") return false;
@@ -308,7 +328,11 @@ export default function PredictClient({
         {nextKickoff && now < nextKickoff ? (
           <div className="flex flex-col gap-1">
             <span className="text-xs uppercase tracking-wide text-muted">
-              {nextLock ? "Next pick locks in" : "Next kickoff in"}
+              {inGraceWindow
+                ? "First game still open for"
+                : nextLock
+                  ? "Next pick locks in"
+                  : "Next kickoff in"}
             </span>
             <span className="text-3xl font-bold text-accent">
               <Countdown
@@ -387,6 +411,7 @@ export default function PredictClient({
         <ul className="flex flex-col gap-3">
           {matches.map((m) => {
             const locked = isLocked(m);
+            const inGrace = graceMatchId === m.id && !locked;
             const p = picks[m.id] ?? { home: "", away: "", pkWinner: null };
             const showPk =
               m.isKnockout && isTiedPick(p) && !locked && !needsName;
@@ -404,7 +429,7 @@ export default function PredictClient({
                     {m.group || m.round}
                     {m.ground ? ` · ${m.ground}` : ""}
                   </span>
-                  {statusBadge(m, locked)}
+                  {statusBadge(m, locked, inGrace)}
                 </div>
                 <div className="flex items-center gap-3">
                   <TeamSide name={m.team1} flag={m.flag1} align="left" />

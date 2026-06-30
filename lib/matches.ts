@@ -1,4 +1,4 @@
-import { COUNTDOWN_OVERRIDE } from "./config";
+import { COUNTDOWN_OVERRIDE, FIRST_MATCH_GRACE_MS } from "./config";
 import { getStore } from "./db";
 import { flagUrlForTeam } from "./flags";
 import {
@@ -273,9 +273,44 @@ export async function getMatchById(id: string): Promise<Match | undefined> {
   return all.find((m) => m.id === id);
 }
 
-/** A match is locked for predictions once its kickoff has passed. */
-export function isLocked(match: Match, now: number = Date.now()): boolean {
+/** A match is locked for predictions once its kickoff has passed (with optional grace). */
+export function isLocked(
+  match: Match,
+  now: number = Date.now(),
+  opts?: { graceMatchId?: string | null },
+): boolean {
+  if (match.status === "finished") return true;
+
+  const inGrace =
+    opts?.graceMatchId === match.id &&
+    now >= match.kickoff &&
+    now < match.kickoff + FIRST_MATCH_GRACE_MS;
+
+  if (inGrace) return false;
+
   return now >= match.kickoff || match.status !== "upcoming";
+}
+
+/** First match of a calendar day that is still inside the post-kickoff grace window. */
+export function firstMatchGraceId(
+  dayMatches: Match[],
+  now: number = Date.now(),
+): string | null {
+  const first = [...dayMatches].sort((a, b) => a.kickoff - b.kickoff)[0];
+  if (!first || first.status === "finished") return null;
+  if (now < first.kickoff) return null;
+  if (now >= first.kickoff + FIRST_MATCH_GRACE_MS) return null;
+  return first.id;
+}
+
+export function graceEndsAt(
+  dayMatches: Match[],
+  now: number = Date.now(),
+): number | null {
+  const id = firstMatchGraceId(dayMatches, now);
+  if (!id) return null;
+  const first = dayMatches.find((m) => m.id === id);
+  return first ? first.kickoff + FIRST_MATCH_GRACE_MS : null;
 }
 
 export interface Matchday {
@@ -286,8 +321,12 @@ export interface Matchday {
   nextKickoff: number | null;
   /** The next match to lock (drives the countdown label), or null. */
   nextMatch: Match | null;
-  /** All of the displayed day's matches have kicked off. */
+  /** All of the displayed day's matches have kicked off (ignoring grace). */
   allLocked: boolean;
+  /** First match of the day still editable during post-kickoff grace. */
+  graceMatchId: string | null;
+  /** When the grace window ends (epoch ms), if active. */
+  graceEndsAt: number | null;
 }
 
 /**
@@ -331,8 +370,23 @@ export function getMatchday(all: Match[], now: number = Date.now()): Matchday {
     .filter((m) => m.kickoff > now)
     .sort((a, b) => a.kickoff - b.kickoff);
   const nextMatch = upcoming[0] ?? null;
-  const nextKickoff = overrideMs ?? nextMatch?.kickoff ?? null;
-  const allLocked = matches.length > 0 && matches.every((m) => now >= m.kickoff);
+  const graceMatchId = firstMatchGraceId(matches, now);
+  const graceEnd = graceEndsAt(matches, now);
+  const nextKickoff =
+    overrideMs ?? graceEnd ?? nextMatch?.kickoff ?? null;
+  const allLocked =
+    matches.length > 0 &&
+    matches.every((m) => isLocked(m, now, { graceMatchId }));
 
-  return { dayKey, matches, nextKickoff, nextMatch, allLocked };
+  return {
+    dayKey,
+    matches,
+    nextKickoff,
+    nextMatch: graceMatchId
+      ? (matches.find((m) => m.id === graceMatchId) ?? nextMatch)
+      : nextMatch,
+    allLocked,
+    graceMatchId,
+    graceEndsAt: graceEnd,
+  };
 }
