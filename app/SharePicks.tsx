@@ -2,12 +2,12 @@
 
 import { useState } from "react";
 import { APP_NAME, SHARE_URL } from "@/lib/config";
-import { flagEmojiForTeam } from "@/lib/flags";
-import type { ClientMatch } from "./types";
+import { formatPickLine } from "@/lib/format-picks";
+import type { ClientMatch, PickEntry } from "./types";
 
 export function buildShareText(
   matches: ClientMatch[],
-  picks: Record<string, { home: string; away: string }>,
+  picks: Record<string, PickEntry>,
   dayLabel: string,
 ): string {
   const lines: string[] = [`${APP_NAME} picks — ${dayLabel}`];
@@ -16,9 +16,17 @@ export function buildShareText(
     const p = picks[m.id];
     if (!p || p.home === "" || p.away === "") continue;
     any = true;
-    const f1 = flagEmojiForTeam(m.team1, m.flag1);
-    const f2 = flagEmojiForTeam(m.team2, m.flag2);
-    lines.push(`${f1} ${p.home}-${p.away} ${f2}`);
+    lines.push(
+      formatPickLine(
+        p.home,
+        p.away,
+        m.team1,
+        m.team2,
+        m.flag1,
+        m.flag2,
+        p.pkWinner,
+      ),
+    );
   }
   if (!any) lines.push("(no picks yet)");
   lines.push(`Play / see the board: ${SHARE_URL}`);
@@ -32,7 +40,7 @@ export default function SharePicks({
   canCopy = true,
 }: {
   matches: ClientMatch[];
-  picks: Record<string, { home: string; away: string }>;
+  picks: Record<string, PickEntry>;
   dayLabel: string;
   canCopy?: boolean;
 }) {
@@ -44,7 +52,6 @@ export default function SharePicks({
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      // Fallback for browsers without clipboard API.
       const ta = document.createElement("textarea");
       ta.value = text;
       document.body.appendChild(ta);

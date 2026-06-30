@@ -10,7 +10,7 @@ interface AdminMatch {
   status: string;
   score: [number, number] | null;
   kickoffLabel: string;
-  override: [number, number] | null;
+  override: { home: number; away: number } | null;
 }
 
 function Row({
@@ -20,7 +20,9 @@ function Row({
   m: AdminMatch;
   password: string;
 }) {
-  const init = m.override ?? m.score;
+  const init = m.override
+    ? ([m.override.home, m.override.away] as [number, number])
+    : m.score;
   const [home, setHome] = useState(init ? String(init[0]) : "");
   const [away, setAway] = useState(init ? String(init[1]) : "");
   const [msg, setMsg] = useState<string | null>(null);

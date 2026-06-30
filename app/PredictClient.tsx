@@ -4,9 +4,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Countdown from "./Countdown";
 import SharePicks from "./SharePicks";
 import ShareResults from "./ShareResults";
-import type { ClientMatch, NextLock } from "./types";
+import type { ClientMatch, NextLock, PickEntry } from "./types";
+import { flagEmojiForTeam } from "@/lib/flags";
+import type { PkSide } from "@/lib/knockout";
+import { pensSuffix } from "@/lib/format-picks";
 
-type Picks = Record<string, { home: string; away: string }>;
+type Picks = Record<string, PickEntry>;
+
+function isTiedPick(p: PickEntry | undefined): boolean {
+  if (!p || p.home === "" || p.away === "") return false;
+  return Number(p.home) === Number(p.away);
+}
 
 function statusBadge(m: ClientMatch, locked: boolean) {
   if (m.status === "live") {
@@ -101,6 +109,52 @@ function ScoreInput({
   );
 }
 
+function PkSelector({
+  match,
+  value,
+  onChange,
+  disabled,
+}: {
+  match: ClientMatch;
+  value: PkSide | null;
+  onChange: (side: PkSide) => void;
+  disabled: boolean;
+}) {
+  const options: { side: PkSide; name: string; flag: string | null }[] = [
+    { side: "home", name: match.team1, flag: match.flag1 },
+    { side: "away", name: match.team2, flag: match.flag2 },
+  ];
+
+  return (
+    <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 p-3">
+      <p className="mb-2 text-center text-xs font-medium text-foreground">
+        Who wins if it goes to penalties? <span className="text-red-400">*</span>
+      </p>
+      <div className="flex gap-2">
+        {options.map((opt) => {
+          const selected = value === opt.side;
+          return (
+            <button
+              key={opt.side}
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(opt.side)}
+              className={`flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                selected
+                  ? "border-accent bg-accent/20 text-foreground"
+                  : "border-border bg-surface-2 text-muted hover:border-accent/50 hover:text-foreground"
+              }`}
+            >
+              <span>{flagEmojiForTeam(opt.name, opt.flag)}</span>
+              <span className="truncate">{opt.name}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function PredictClient({
   matches,
   dayLabel,
@@ -120,7 +174,7 @@ export default function PredictClient({
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const [tick, setTick] = useState(0); // forces countdown target refresh
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -132,7 +186,11 @@ export default function PredictClient({
     const data = await res.json();
     const next: Picks = {};
     for (const p of data.predictions ?? []) {
-      next[p.matchId] = { home: String(p.home), away: String(p.away) };
+      next[p.matchId] = {
+        home: String(p.home),
+        away: String(p.away),
+        pkWinner: p.pkWinner ?? null,
+      };
     }
     setPicks(next);
     setDirty(false);
@@ -166,9 +224,23 @@ export default function PredictClient({
 
   function setPick(id: string, side: "home" | "away", v: string) {
     setDirty(true);
+    setPicks((prev) => {
+      const cur = prev[id] ?? { home: "", away: "", pkWinner: null };
+      const next = { ...cur, [side]: v };
+      const home = side === "home" ? v : cur.home;
+      const away = side === "away" ? v : cur.away;
+      if (home !== "" && away !== "" && Number(home) !== Number(away)) {
+        next.pkWinner = null;
+      }
+      return { ...prev, [id]: next };
+    });
+  }
+
+  function setPkWinner(id: string, side: PkSide) {
+    setDirty(true);
     setPicks((prev) => ({
       ...prev,
-      [id]: { home: prev[id]?.home ?? "", away: prev[id]?.away ?? "", [side]: v },
+      [id]: { ...(prev[id] ?? { home: "", away: "", pkWinner: null }), pkWinner: side },
     }));
   }
 
@@ -176,6 +248,14 @@ export default function PredictClient({
     (m: ClientMatch) => now >= m.kickoff || m.status !== "upcoming",
     [now],
   );
+
+  function pickReady(m: ClientMatch, p: PickEntry | undefined): boolean {
+    if (!p || p.home === "" || p.away === "") return false;
+    if (m.isKnockout && Number(p.home) === Number(p.away) && !p.pkWinner) {
+      return false;
+    }
+    return true;
+  }
 
   async function saveAll() {
     if (!name) {
@@ -189,7 +269,7 @@ export default function PredictClient({
     for (const m of matches) {
       if (isLocked(m)) continue;
       const p = picks[m.id];
-      if (!p || p.home === "" || p.away === "") continue;
+      if (!pickReady(m, p)) continue;
       const res = await fetch("/wc/api/predictions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -197,6 +277,7 @@ export default function PredictClient({
           matchId: m.id,
           home: Number(p.home),
           away: Number(p.away),
+          pkWinner: p.pkWinner,
         }),
       });
       if (res.ok) count++;
@@ -206,7 +287,7 @@ export default function PredictClient({
     if (failed === 0) setDirty(false);
     setSaveMsg(
       failed > 0
-        ? `Saved ${count}, ${failed} failed (locked?)`
+        ? `Saved ${count}, ${failed} failed (locked or missing PK pick?)`
         : count > 0
           ? `Saved ${count} pick${count === 1 ? "" : "s"} ✓`
           : "Nothing to save",
@@ -223,7 +304,6 @@ export default function PredictClient({
 
   return (
     <div>
-      {/* Countdown banner */}
       <section className="mb-5 rounded-2xl border border-border bg-surface p-4">
         {nextKickoff && now < nextKickoff ? (
           <div className="flex flex-col gap-1">
@@ -253,7 +333,6 @@ export default function PredictClient({
         )}
       </section>
 
-      {/* Identity bar */}
       <section className="mb-5">
         {name && !editingName ? (
           <div className="flex items-center justify-between rounded-xl border border-border bg-surface px-4 py-2.5 text-sm">
@@ -293,7 +372,6 @@ export default function PredictClient({
         )}
       </section>
 
-      {/* Match list */}
       <div className="mb-3 flex items-baseline justify-between">
         <h2 className="text-lg font-bold">{dayLabel}</h2>
         <span className="text-xs text-muted">
@@ -309,7 +387,9 @@ export default function PredictClient({
         <ul className="flex flex-col gap-3">
           {matches.map((m) => {
             const locked = isLocked(m);
-            const p = picks[m.id] ?? { home: "", away: "" };
+            const p = picks[m.id] ?? { home: "", away: "", pkWinner: null };
+            const showPk =
+              m.isKnockout && isTiedPick(p) && !locked && !needsName;
             return (
               <li
                 key={m.id}
@@ -321,7 +401,7 @@ export default function PredictClient({
               >
                 <div className="mb-3 flex items-center justify-between text-xs text-muted">
                   <span>
-                    {m.group}
+                    {m.group || m.round}
                     {m.ground ? ` · ${m.ground}` : ""}
                   </span>
                   {statusBadge(m, locked)}
@@ -345,11 +425,28 @@ export default function PredictClient({
                   </div>
                   <TeamSide name={m.team2} flag={m.flag2} align="right" />
                 </div>
+                {showPk && (
+                  <PkSelector
+                    match={m}
+                    value={p.pkWinner}
+                    onChange={(side) => setPkWinner(m.id, side)}
+                    disabled={locked || needsName}
+                  />
+                )}
                 {m.score && (
                   <div className="mt-3 text-center text-xs text-muted">
                     {m.status === "live" ? "Live" : "Full time"}:{" "}
                     <span className="font-semibold text-foreground">
                       {m.score[0]} – {m.score[1]}
+                      {m.pkWinner
+                        ? pensSuffix(
+                            m.pkWinner,
+                            m.team1,
+                            m.team2,
+                            m.flag1,
+                            m.flag2,
+                          )
+                        : ""}
                     </span>
                   </div>
                 )}
@@ -359,7 +456,6 @@ export default function PredictClient({
         </ul>
       )}
 
-      {/* Save bar */}
       {openCount > 0 && (
         <div className="sticky bottom-4 mt-5 flex items-center justify-between gap-3 rounded-2xl border border-border bg-surface-2/95 p-3 backdrop-blur">
           <span className="text-sm text-muted">
