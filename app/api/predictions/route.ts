@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getStore } from "@/lib/db";
 import { resolveUser, UID_COOKIE, UID_COOKIE_OPTS } from "@/lib/identity";
-import type { PkSide } from "@/lib/knockout";
+import { isKnockoutMatch, type PkSide } from "@/lib/knockout";
 import {
   firstMatchGraceId,
-  getMatches,
   getMatchById,
+  getMatches,
   isLocked,
 } from "@/lib/matches";
 import { tzDateKey } from "@/lib/time";
@@ -87,7 +87,8 @@ export async function POST(req: NextRequest) {
   }
 
   const tied = isTiedScore(home, away);
-  if (match.isKnockout && tied && !pkWinner) {
+  const knockout = match.isKnockout || isKnockoutMatch(match.round, match.group);
+  if (knockout && tied && !pkWinner) {
     return NextResponse.json(
       { error: "Pick a penalty-shootout winner for a tied knockout score." },
       { status: 400 },

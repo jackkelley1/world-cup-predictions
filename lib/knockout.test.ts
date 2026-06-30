@@ -5,11 +5,18 @@ import { isKnockoutMatch, pkWinnerFromPenalties } from "./knockout.ts";
 describe("isKnockoutMatch", () => {
   it("treats group matchdays as not knockout", () => {
     assert.equal(isKnockoutMatch("Matchday 3", "Group B"), false);
+    assert.equal(isKnockoutMatch("Matchday 17", "Group L"), false);
   });
 
   it("treats knockout rounds without groups as knockout", () => {
     assert.equal(isKnockoutMatch("Round of 32", ""), true);
+    assert.equal(isKnockoutMatch("Round of 16", ""), true);
+    assert.equal(isKnockoutMatch("Quarter-finals", ""), true);
     assert.equal(isKnockoutMatch("Final", ""), true);
+  });
+
+  it("detects knockout when the round label is only in group", () => {
+    assert.equal(isKnockoutMatch("Matchday 1", "Round of 16"), true);
   });
 });
 

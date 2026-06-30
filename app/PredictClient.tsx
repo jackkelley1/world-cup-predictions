@@ -7,7 +7,7 @@ import ShareResults from "./ShareResults";
 import type { ClientMatch, NextLock, PickEntry } from "./types";
 import { FIRST_MATCH_GRACE_MS } from "@/lib/config";
 import { flagEmojiForTeam } from "@/lib/flags";
-import type { PkSide } from "@/lib/knockout";
+import { isKnockoutMatch, type PkSide } from "@/lib/knockout";
 import { pensSuffix } from "@/lib/format-picks";
 
 type Picks = Record<string, PickEntry>;
@@ -115,6 +115,10 @@ function ScoreInput({
       className="h-11 w-11 rounded-lg border border-border bg-surface-2 text-center text-lg font-bold text-foreground outline-none focus:border-accent disabled:cursor-not-allowed disabled:border-transparent disabled:bg-surface disabled:text-muted disabled:opacity-50"
     />
   );
+}
+
+function isKnockout(m: ClientMatch): boolean {
+  return m.isKnockout || isKnockoutMatch(m.round, m.group);
 }
 
 function PkSelector({
@@ -271,7 +275,7 @@ export default function PredictClient({
 
   function pickReady(m: ClientMatch, p: PickEntry | undefined): boolean {
     if (!p || p.home === "" || p.away === "") return false;
-    if (m.isKnockout && Number(p.home) === Number(p.away) && !p.pkWinner) {
+    if (isKnockout(m) && Number(p.home) === Number(p.away) && !p.pkWinner) {
       return false;
     }
     return true;
@@ -414,7 +418,7 @@ export default function PredictClient({
             const inGrace = graceMatchId === m.id && !locked;
             const p = picks[m.id] ?? { home: "", away: "", pkWinner: null };
             const showPk =
-              m.isKnockout && isTiedPick(p) && !locked && !needsName;
+              isKnockout(m) && isTiedPick(p) && !locked && !needsName;
             return (
               <li
                 key={m.id}

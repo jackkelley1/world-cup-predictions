@@ -4,9 +4,11 @@ import { FIRST_MATCH_GRACE_MS } from "./config.ts";
 import {
   firstMatchGraceId,
   graceEndsAt,
+  hydrateMatch,
   isLocked,
   type Match,
 } from "./matches.ts";
+import { isKnockoutMatch } from "./knockout.ts";
 
 function sampleMatch(overrides: Partial<Match> = {}): Match {
   return {
@@ -58,5 +60,28 @@ describe("first-match grace window", () => {
   it("reports grace end time", () => {
     const duringGrace = kickoff + 60_000;
     assert.equal(graceEndsAt(day, duringGrace), kickoff + FIRST_MATCH_GRACE_MS);
+  });
+});
+
+describe("hydrateMatch", () => {
+  it("recomputes isKnockout on cached rows missing the flag", () => {
+    const raw = {
+      id: "72",
+      round: "Round of 32",
+      group: "",
+      team1: "Germany",
+      team2: "Paraguay",
+      flag1: null,
+      flag2: null,
+      status: "upcoming" as const,
+      score: null,
+      pkWinner: null,
+      liveMinute: null,
+      kickoff: 1,
+      ground: "",
+    };
+    const hydrated = hydrateMatch({ ...raw, isKnockout: false });
+    assert.equal(hydrated.isKnockout, true);
+    assert.equal(isKnockoutMatch(hydrated.round, hydrated.group), true);
   });
 });

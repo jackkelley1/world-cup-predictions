@@ -234,31 +234,30 @@ async function readMatchCache(): Promise<Match[] | null> {
  * it would orphan every saved prediction.
  */
 export async function getMatches(): Promise<Match[]> {
-  if (cache && Date.now() - cache.at < TTL_MS) return cache.data;
+  if (cache && Date.now() - cache.at < TTL_MS) return hydrateMatches(cache.data);
   try {
     const res = await fetch(FEED_URL, {
       cache: "no-store",
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) throw new Error(`feed ${res.status}`);
-    const data = normalizeFeed(await res.json());
+    const data = hydrateMatches(normalizeFeed(await res.json()));
     if (data.length === 0) throw new Error("empty feed");
     cache = { at: Date.now(), data };
     lastGood = data;
     void persistMatchCache(data);
     return data;
   } catch {
-    if (lastGood) return lastGood;
-    // Prefer the persisted primary feed so IDs stay stable across deploys.
+    if (lastGood) return hydrateMatches(lastGood);
     const dbCached = await readMatchCache();
     if (dbCached) {
-      cache = { at: Date.now(), data: dbCached };
-      lastGood = dbCached;
-      return dbCached;
+      const data = hydrateMatches(dbCached as Match[]);
+      cache = { at: Date.now(), data };
+      lastGood = data;
+      return data;
     }
-    // Cold start only, with no cached primary data anywhere.
     try {
-      const data = await fetchFallback();
+      const data = hydrateMatches(await fetchFallback());
       cache = { at: Date.now(), data };
       lastGood = data;
       return data;
@@ -266,6 +265,23 @@ export async function getMatches(): Promise<Match[]> {
       return [];
     }
   }
+}
+
+/** Re-apply derived fields so cached feed rows stay current after deploys. */
+export function hydrateMatch(m: Match): Match {
+  const round = String(m.round ?? "");
+  const group = String(m.group ?? "");
+  return {
+    ...m,
+    round,
+    group,
+    isKnockout: isKnockoutMatch(round, group),
+    pkWinner: m.pkWinner ?? null,
+  };
+}
+
+export function hydrateMatches(data: Match[]): Match[] {
+  return data.map(hydrateMatch);
 }
 
 export async function getMatchById(id: string): Promise<Match | undefined> {
