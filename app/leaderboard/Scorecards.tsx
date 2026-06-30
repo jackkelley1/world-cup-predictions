@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { flagEmojiForTeam } from "@/lib/flags";
-import { scoreMatch } from "@/lib/scoring";
+import { pensSuffix } from "@/lib/format-picks";
+import { scorePrediction } from "@/lib/scoring";
+import type { PkSide } from "@/lib/knockout";
 
 interface SCMatch {
   id: string;
@@ -12,14 +14,21 @@ interface SCMatch {
   flag2: string | null;
   status: "upcoming" | "live" | "finished";
   score: [number, number] | null;
+  pkWinner: PkSide | null;
   locked: boolean;
   kickoffLabel: string;
+}
+
+interface Pick {
+  home: number;
+  away: number;
+  pkWinner: PkSide | null;
 }
 
 interface Card {
   userId: string;
   name: string;
-  picks: Record<string, [number, number]>;
+  picks: Record<string, Pick>;
 }
 
 interface DayOption {
@@ -49,9 +58,17 @@ function tierClass(tier: 0 | 1 | 2 | 3): string {
   }
 }
 
+function formatPickLabel(
+  pick: Pick,
+  m: SCMatch,
+): string {
+  const base = `${pick.home}-${pick.away}`;
+  if (!pick.pkWinner) return base;
+  return `${base}${pensSuffix(pick.pkWinner, m.team1, m.team2, m.flag1, m.flag2)}`;
+}
+
 export default function Scorecards() {
   const [data, setData] = useState<Data | null>(null);
-  // Selected day key; null means "let the server pick the latest day".
   const [day, setDay] = useState<string | null>(null);
 
   useEffect(() => {
@@ -88,12 +105,17 @@ export default function Scorecards() {
     idx >= 0 && idx < data.days.length - 1 ? data.days[idx + 1] : null;
   const dayHasScores = data.matches.some((m) => m.score != null);
 
-  // Daily total per card, then rank by total (ties share a rank).
   const scored = data.cards.map((c) => {
     const total = data.matches.reduce((sum, m) => {
       const pick = c.picks[m.id];
       if (!pick || m.score == null) return sum;
-      return sum + scoreMatch(pick, m.score as [number, number]);
+      return (
+        sum +
+        scorePrediction(pick, {
+          ftScore: m.score as [number, number],
+          pkWinner: m.pkWinner,
+        })
+      );
     }, 0);
     return { card: c, total };
   });
@@ -181,7 +203,7 @@ export default function Scorecards() {
                     </div>
                     <div className="mt-1 text-[10px] font-normal text-muted">
                       {m.score
-                        ? `${m.score[0]}-${m.score[1]}${m.status === "live" ? " LIVE" : ""}`
+                        ? `${m.score[0]}-${m.score[1]}${m.pkWinner ? pensSuffix(m.pkWinner, m.team1, m.team2, m.flag1, m.flag2) : ""}${m.status === "live" ? " LIVE" : ""}`
                         : m.kickoffLabel}
                     </div>
                   </th>
@@ -234,18 +256,23 @@ export default function Scorecards() {
                       }
                       const showTier = m.score != null;
                       const tier = showTier
-                        ? scoreMatch(pick, m.score as [number, number])
+                        ? scorePrediction(pick, {
+                            ftScore: m.score as [number, number],
+                            pkWinner: m.pkWinner,
+                          })
                         : null;
+                      const label = formatPickLabel(pick, m);
                       return (
                         <td key={m.id} className="px-2 py-2 text-center">
                           <span
-                            className={`inline-block min-w-[2.5rem] rounded-md px-2 py-1 font-mono text-xs font-semibold ${
+                            className={`inline-block max-w-[7rem] rounded-md px-2 py-1 font-mono text-[10px] font-semibold leading-tight ${
                               tier != null
                                 ? tierClass(tier)
                                 : "bg-surface-2 text-foreground"
                             }`}
+                            title={label}
                           >
-                            {pick[0]}-{pick[1]}
+                            {label}
                           </span>
                         </td>
                       );
@@ -260,7 +287,8 @@ export default function Scorecards() {
 
       <p className="mt-3 text-xs text-muted">
         Finished matches color each pick by points: exact (3), winner + margin
-        (2), right result (1), miss (0).
+        (2), right result (1), miss (0). Knockout ties that go to penalties use
+        a separate shootout scoring scale (max 3).
       </p>
     </section>
   );

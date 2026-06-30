@@ -2,11 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { APP_NAME, SHARE_URL } from "@/lib/config";
-import { flagEmojiForTeam } from "@/lib/flags";
-import { scoreMatch } from "@/lib/scoring";
-import type { ClientMatch } from "./types";
+import { formatPickLine } from "@/lib/format-picks";
+import { scorePrediction } from "@/lib/scoring";
+import type { ClientMatch, PickEntry } from "./types";
 
-type Picks = Record<string, { home: string; away: string }>;
+type Picks = Record<string, PickEntry>;
 
 function isFinished(
   m: ClientMatch,
@@ -29,15 +29,31 @@ export function buildResultsText(
   for (const m of matches) {
     if (!isFinished(m)) continue;
     const [ah, aa] = m.score;
-    const f1 = flagEmojiForTeam(m.team1, m.flag1);
-    const f2 = flagEmojiForTeam(m.team2, m.flag2);
+    const actualLine =
+      formatPickLine(ah, aa, m.team1, m.team2, m.flag1, m.flag2, m.pkWinner);
     const p = picks[m.id];
     if (p && p.home !== "" && p.away !== "") {
-      const tier = scoreMatch([Number(p.home), Number(p.away)], [ah, aa]);
+      const tier = scorePrediction(
+        {
+          home: Number(p.home),
+          away: Number(p.away),
+          pkWinner: p.pkWinner,
+        },
+        { ftScore: [ah, aa], pkWinner: m.pkWinner },
+      );
       total += tier;
-      lines.push(`${f1} ${ah}-${aa} ${f2} · you ${p.home}-${p.away} (${ptsLabel(tier)})`);
+      const yourLine = formatPickLine(
+        p.home,
+        p.away,
+        m.team1,
+        m.team2,
+        m.flag1,
+        m.flag2,
+        p.pkWinner,
+      );
+      lines.push(`${actualLine} · you ${yourLine} (${ptsLabel(tier)})`);
     } else {
-      lines.push(`${f1} ${ah}-${aa} ${f2} · no pick`);
+      lines.push(`${actualLine} · no pick`);
     }
   }
   if (leader) lines.push(`Leader: ${leader.name} (${ptsLabel(leader.points)})`);

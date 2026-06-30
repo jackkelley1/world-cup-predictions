@@ -1,6 +1,12 @@
 import { COUNTDOWN_OVERRIDE } from "./config";
 import { getStore } from "./db";
 import { flagUrlForTeam } from "./flags";
+import {
+  isKnockoutMatch,
+  pkWinnerFromPenalties,
+  pkWinnerFromTeamName,
+  type PkSide,
+} from "./knockout";
 import { tzDateKey } from "./time";
 
 const FEED_URL = "https://wcup2026.org/api/data.php?action=all";
@@ -18,13 +24,20 @@ export interface Match {
   flag1: string | null;
   flag2: string | null;
   status: MatchStatus;
-  /** Final/live score [home, away], or null if not started. */
+  /** Knockout round (not a group-stage matchday). */
+  isKnockout: boolean;
+  /** Score before a shootout (after ET when played), or null if not started. */
   score: [number, number] | null;
+  /** Shootout winner when the match was decided on penalties. */
+  pkWinner: PkSide | null;
   liveMinute: number | null;
   /** Kickoff as epoch milliseconds. */
   kickoff: number;
   ground: string;
 }
+
+export type { PkSide };
+export { isKnockoutMatch };
 
 const TTL_MS = 30_000;
 let cache: { at: number; data: Match[] } | null = null;
@@ -45,6 +58,50 @@ function normalizeScore(raw: unknown): [number, number] | null {
   return null;
 }
 
+interface ParsedScores {
+  ftScore: [number, number] | null;
+  pkWinner: PkSide | null;
+}
+
+/** Parse regulation/ET score and optional shootout winner from feed fields. */
+function parseMatchScores(
+  o: Record<string, unknown>,
+  team1: string,
+  team2: string,
+): ParsedScores {
+  const raw = o.score;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const scoreObj = raw as Record<string, unknown>;
+    const ft = normalizeScore(scoreObj.ft);
+    const et = normalizeScore(scoreObj.et);
+    const pens = normalizeScore(scoreObj.p);
+    const ftScore = et ?? ft;
+    const pkWinner = pens ? pkWinnerFromPenalties(pens) : null;
+    return { ftScore, pkWinner };
+  }
+
+  const ftScore = normalizeScore(raw);
+  const pens =
+    normalizeScore(o.penalty_score) ??
+    normalizeScore(o.pens) ??
+    normalizeScore(o.penalties) ??
+    normalizeScore(o.pk_score);
+  let pkWinner = pens ? pkWinnerFromPenalties(pens) : null;
+
+  const winnerRaw = o.penalty_winner ?? o.pk_winner ?? o.shootout_winner;
+  if (!pkWinner && typeof winnerRaw === "string") {
+    pkWinner = pkWinnerFromTeamName(winnerRaw, team1, team2);
+  }
+  if (!pkWinner && (winnerRaw === 1 || winnerRaw === "1" || winnerRaw === "home")) {
+    pkWinner = "home";
+  }
+  if (!pkWinner && (winnerRaw === 2 || winnerRaw === "2" || winnerRaw === "away")) {
+    pkWinner = "away";
+  }
+
+  return { ftScore, pkWinner };
+}
+
 /** Parse the live wcup2026.org `action=all` response. */
 function normalizeFeed(json: unknown): Match[] {
   const matches = (json as { matches?: unknown[] })?.matches;
@@ -55,17 +112,23 @@ function normalizeFeed(json: unknown): Match[] {
       const kickoffSec = Number(o.datetime);
       if (!Number.isFinite(kickoffSec)) return null;
       const status = normalizeStatus(o.status);
-      const score = normalizeScore(o.score);
+      const team1 = String(o.team1 ?? "TBD");
+      const team2 = String(o.team2 ?? "TBD");
+      const round = String(o.round ?? "");
+      const group = String(o.group ?? "");
+      const { ftScore, pkWinner } = parseMatchScores(o, team1, team2);
       return {
         id: String(o.id),
-        round: String(o.round ?? ""),
-        group: String(o.group ?? ""),
-        team1: String(o.team1 ?? "TBD"),
-        team2: String(o.team2 ?? "TBD"),
+        round,
+        group,
+        team1,
+        team2,
         flag1: (o.flag1 as string) ?? null,
         flag2: (o.flag2 as string) ?? null,
         status,
-        score: status === "upcoming" ? null : score,
+        isKnockout: isKnockoutMatch(round, group),
+        score: status === "upcoming" ? null : ftScore,
+        pkWinner: status === "upcoming" ? null : pkWinner,
         liveMinute:
           o.live_minute != null && Number.isFinite(Number(o.live_minute))
             ? Number(o.live_minute)
@@ -105,23 +168,26 @@ function normalizeOpenFootball(json: unknown): Match[] {
       if (kickoff == null) return null;
       const team1 = String(o.team1 ?? "TBD");
       const team2 = String(o.team2 ?? "TBD");
-      const ft = (o.score as { ft?: unknown })?.ft;
-      const score = normalizeScore(ft);
-      const status: MatchStatus = score
+      const round = String(o.round ?? "");
+      const group = String(o.group ?? "");
+      const { ftScore, pkWinner } = parseMatchScores(o, team1, team2);
+      const status: MatchStatus = ftScore
         ? "finished"
         : now >= kickoff
           ? "live"
           : "upcoming";
       return {
         id: `${date}-${team1}-${team2}`.replace(/\s+/g, "_"),
-        round: String(o.round ?? ""),
-        group: String(o.group ?? ""),
+        round,
+        group,
         team1,
         team2,
         flag1: flagUrlForTeam(team1),
         flag2: flagUrlForTeam(team2),
         status,
-        score,
+        isKnockout: isKnockoutMatch(round, group),
+        score: ftScore,
+        pkWinner: ftScore ? pkWinner : null,
         liveMinute: null,
         kickoff,
         ground: String(o.ground ?? ""),

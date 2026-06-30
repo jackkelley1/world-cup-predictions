@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import ScoringRules from "./ScoringRules";
 
-const SEEN_KEY = "wc_scoring_seen_v1";
+const SEEN_KEY = "wc_scoring_seen_v2";
 
 export default function ScoringModal() {
   const [open, setOpen] = useState(false);

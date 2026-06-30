@@ -1,9 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getStore } from "@/lib/db";
 import { resolveUser, UID_COOKIE, UID_COOKIE_OPTS } from "@/lib/identity";
+import type { PkSide } from "@/lib/knockout";
 import { getMatchById, isLocked } from "@/lib/matches";
 
 export const dynamic = "force-dynamic";
+
+function parsePkWinner(raw: unknown): PkSide | null {
+  if (raw === "home" || raw === "away") return raw;
+  return null;
+}
+
+function isTiedScore(home: number, away: number): boolean {
+  return home === away;
+}
 
 export async function GET(req: NextRequest) {
   const { user, healCookie } = await resolveUser(req);
@@ -15,6 +25,7 @@ export async function GET(req: NextRequest) {
       matchId: p.matchId,
       home: p.home,
       away: p.away,
+      pkWinner: p.pkWinner,
     })),
   });
   if (healCookie) res.cookies.set(UID_COOKIE, user.id, UID_COOKIE_OPTS);
@@ -34,10 +45,12 @@ export async function POST(req: NextRequest) {
     matchId?: unknown;
     home?: unknown;
     away?: unknown;
+    pkWinner?: unknown;
   };
   const matchId = typeof body.matchId === "string" ? body.matchId : "";
   const home = Number(body.home);
   const away = Number(body.away);
+  const pkWinner = parsePkWinner(body.pkWinner);
 
   if (
     !matchId ||
@@ -62,8 +75,28 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const tied = isTiedScore(home, away);
+  if (match.isKnockout && tied && !pkWinner) {
+    return NextResponse.json(
+      { error: "Pick a penalty-shootout winner for a tied knockout score." },
+      { status: 400 },
+    );
+  }
+  if (!tied && pkWinner) {
+    return NextResponse.json(
+      { error: "Penalty winner only applies to tied scores." },
+      { status: 400 },
+    );
+  }
+
   const store = getStore();
-  await store.upsertPrediction(user.id, matchId, home, away);
+  await store.upsertPrediction(
+    user.id,
+    matchId,
+    home,
+    away,
+    tied ? pkWinner : null,
+  );
 
   const res = NextResponse.json({ ok: true });
   if (healCookie) res.cookies.set(UID_COOKIE, user.id, UID_COOKIE_OPTS);

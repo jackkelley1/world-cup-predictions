@@ -1,7 +1,8 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
-import type { PredictionRow } from "./scoring";
+import type { PredictionRow, ScoreOverride } from "./scoring";
+import type { PkSide } from "./knockout";
 
 export interface User {
   id: string;
@@ -25,11 +26,17 @@ export interface Store {
     matchId: string,
     home: number,
     away: number,
+    pkWinner: PkSide | null,
   ): Promise<void>;
   getPredictionsForUser(userId: string): Promise<Prediction[]>;
   getAllPredictions(): Promise<Prediction[]>;
-  getOverrides(): Promise<Record<string, [number, number]>>;
-  setOverride(matchId: string, home: number, away: number): Promise<void>;
+  getOverrides(): Promise<Record<string, ScoreOverride>>;
+  setOverride(
+    matchId: string,
+    home: number,
+    away: number,
+    pkWinner?: PkSide | null,
+  ): Promise<void>;
   clearOverride(matchId: string): Promise<void>;
   /** Last-good match feed, persisted so feed outages never change match IDs. */
   getMatchCache(): Promise<{ json: unknown; updatedAt: number } | null>;
@@ -78,11 +85,13 @@ class PostgresStore implements Store {
         updated_at BIGINT NOT NULL,
         PRIMARY KEY (user_id, match_id)
       );
+      ALTER TABLE predictions ADD COLUMN IF NOT EXISTS pk_winner TEXT;
       CREATE TABLE IF NOT EXISTS score_overrides (
         match_id TEXT PRIMARY KEY,
         home INT NOT NULL,
         away INT NOT NULL
       );
+      ALTER TABLE score_overrides ADD COLUMN IF NOT EXISTS pk_winner TEXT;
       CREATE TABLE IF NOT EXISTS match_cache (
         id TEXT PRIMARY KEY,
         data JSONB NOT NULL,
@@ -135,19 +144,32 @@ class PostgresStore implements Store {
     return out;
   }
 
-  async upsertPrediction(userId: string, matchId: string, home: number, away: number): Promise<void> {
+  async upsertPrediction(
+    userId: string,
+    matchId: string,
+    home: number,
+    away: number,
+    pkWinner: PkSide | null,
+  ): Promise<void> {
     await this.q(
-      `INSERT INTO predictions (user_id, match_id, home, away, updated_at)
-       VALUES ($1,$2,$3,$4,$5)
+      `INSERT INTO predictions (user_id, match_id, home, away, pk_winner, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (user_id, match_id)
-       DO UPDATE SET home = EXCLUDED.home, away = EXCLUDED.away, updated_at = EXCLUDED.updated_at`,
-      [userId, matchId, home, away, Date.now()],
+       DO UPDATE SET home = EXCLUDED.home, away = EXCLUDED.away,
+         pk_winner = EXCLUDED.pk_winner, updated_at = EXCLUDED.updated_at`,
+      [userId, matchId, home, away, pkWinner, Date.now()],
     );
   }
 
   async getPredictionsForUser(userId: string): Promise<Prediction[]> {
-    const rows = await this.q<{ match_id: string; home: number; away: number; updated_at: string }>(
-      "SELECT match_id, home, away, updated_at FROM predictions WHERE user_id = $1",
+    const rows = await this.q<{
+      match_id: string;
+      home: number;
+      away: number;
+      pk_winner: string | null;
+      updated_at: string;
+    }>(
+      "SELECT match_id, home, away, pk_winner, updated_at FROM predictions WHERE user_id = $1",
       [userId],
     );
     return rows.map((r) => ({
@@ -155,37 +177,59 @@ class PostgresStore implements Store {
       matchId: r.match_id,
       home: r.home,
       away: r.away,
+      pkWinner: parsePkWinner(r.pk_winner),
       updatedAt: Number(r.updated_at),
     }));
   }
 
   async getAllPredictions(): Promise<Prediction[]> {
-    const rows = await this.q<{ user_id: string; match_id: string; home: number; away: number; updated_at: string }>(
-      "SELECT user_id, match_id, home, away, updated_at FROM predictions",
-    );
+    const rows = await this.q<{
+      user_id: string;
+      match_id: string;
+      home: number;
+      away: number;
+      pk_winner: string | null;
+      updated_at: string;
+    }>("SELECT user_id, match_id, home, away, pk_winner, updated_at FROM predictions");
     return rows.map((r) => ({
       userId: r.user_id,
       matchId: r.match_id,
       home: r.home,
       away: r.away,
+      pkWinner: parsePkWinner(r.pk_winner),
       updatedAt: Number(r.updated_at),
     }));
   }
 
-  async getOverrides(): Promise<Record<string, [number, number]>> {
-    const rows = await this.q<{ match_id: string; home: number; away: number }>(
-      "SELECT match_id, home, away FROM score_overrides",
-    );
-    const out: Record<string, [number, number]> = {};
-    for (const r of rows) out[r.match_id] = [r.home, r.away];
+  async getOverrides(): Promise<Record<string, ScoreOverride>> {
+    const rows = await this.q<{
+      match_id: string;
+      home: number;
+      away: number;
+      pk_winner: string | null;
+    }>("SELECT match_id, home, away, pk_winner FROM score_overrides");
+    const out: Record<string, ScoreOverride> = {};
+    for (const r of rows) {
+      out[r.match_id] = {
+        home: r.home,
+        away: r.away,
+        pkWinner: parsePkWinner(r.pk_winner),
+      };
+    }
     return out;
   }
 
-  async setOverride(matchId: string, home: number, away: number): Promise<void> {
+  async setOverride(
+    matchId: string,
+    home: number,
+    away: number,
+    pkWinner: PkSide | null = null,
+  ): Promise<void> {
     await this.q(
-      `INSERT INTO score_overrides (match_id, home, away) VALUES ($1,$2,$3)
-       ON CONFLICT (match_id) DO UPDATE SET home = EXCLUDED.home, away = EXCLUDED.away`,
-      [matchId, home, away],
+      `INSERT INTO score_overrides (match_id, home, away, pk_winner) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (match_id) DO UPDATE SET home = EXCLUDED.home, away = EXCLUDED.away,
+         pk_winner = EXCLUDED.pk_winner`,
+      [matchId, home, away, pkWinner],
     );
   }
 
@@ -217,7 +261,7 @@ class PostgresStore implements Store {
 interface FileData {
   users: User[];
   predictions: Prediction[];
-  overrides: Record<string, [number, number]>;
+  overrides: Record<string, ScoreOverride>;
   matchCache?: { json: unknown; updatedAt: number } | null;
 }
 
@@ -236,11 +280,22 @@ class FileStore implements Store {
     if (this.loaded) return;
     try {
       const raw = await fs.readFile(this.file, "utf8");
-      const parsed = JSON.parse(raw) as Partial<FileData>;
+      const parsed = JSON.parse(raw) as Partial<FileData> & {
+        overrides?: Record<string, [number, number] | ScoreOverride>;
+      };
+      const overrides: Record<string, ScoreOverride> = {};
+      for (const [id, ov] of Object.entries(parsed.overrides ?? {})) {
+        overrides[id] = Array.isArray(ov)
+          ? { home: ov[0], away: ov[1], pkWinner: null }
+          : ov;
+      }
       this.data = {
         users: parsed.users ?? [],
-        predictions: parsed.predictions ?? [],
-        overrides: parsed.overrides ?? {},
+        predictions: (parsed.predictions ?? []).map((p) => ({
+          ...p,
+          pkWinner: p.pkWinner ?? null,
+        })),
+        overrides,
         matchCache: parsed.matchCache ?? null,
       };
     } catch {
@@ -299,7 +354,13 @@ class FileStore implements Store {
     return out;
   }
 
-  async upsertPrediction(userId: string, matchId: string, home: number, away: number): Promise<void> {
+  async upsertPrediction(
+    userId: string,
+    matchId: string,
+    home: number,
+    away: number,
+    pkWinner: PkSide | null,
+  ): Promise<void> {
     await this.load();
     const existing = this.data.predictions.find(
       (p) => p.userId === userId && p.matchId === matchId,
@@ -307,9 +368,17 @@ class FileStore implements Store {
     if (existing) {
       existing.home = home;
       existing.away = away;
+      existing.pkWinner = pkWinner;
       existing.updatedAt = Date.now();
     } else {
-      this.data.predictions.push({ userId, matchId, home, away, updatedAt: Date.now() });
+      this.data.predictions.push({
+        userId,
+        matchId,
+        home,
+        away,
+        pkWinner,
+        updatedAt: Date.now(),
+      });
     }
     await this.persist();
   }
@@ -324,14 +393,19 @@ class FileStore implements Store {
     return [...this.data.predictions];
   }
 
-  async getOverrides(): Promise<Record<string, [number, number]>> {
+  async getOverrides(): Promise<Record<string, ScoreOverride>> {
     await this.load();
     return { ...this.data.overrides };
   }
 
-  async setOverride(matchId: string, home: number, away: number): Promise<void> {
+  async setOverride(
+    matchId: string,
+    home: number,
+    away: number,
+    pkWinner: PkSide | null = null,
+  ): Promise<void> {
     await this.load();
-    this.data.overrides[matchId] = [home, away];
+    this.data.overrides[matchId] = { home, away, pkWinner };
     await this.persist();
   }
 
@@ -368,3 +442,8 @@ export function getStore(): Store {
 }
 
 export const usingPostgres = Boolean(DB_URL);
+
+function parsePkWinner(raw: string | null | undefined): PkSide | null {
+  if (raw === "home" || raw === "away") return raw;
+  return null;
+}
